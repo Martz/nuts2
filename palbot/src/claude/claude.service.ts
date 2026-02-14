@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { spawn, ChildProcessWithoutNullStreams } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { Observable, Subject } from 'rxjs';
 
 /** A single streaming event from `claude -p --output-format stream-json` */
@@ -35,6 +35,25 @@ export class ClaudeService {
   private readonly logger = new Logger(ClaudeService.name);
 
   /**
+   * Resolve the full path to the claude binary so spawn always finds it,
+   * even when Node's PATH differs from the user's interactive shell.
+   */
+  private claudeBin = '';
+  private resolveClaudeBin(): string {
+    if (this.claudeBin) return this.claudeBin;
+
+    const { execSync } = require('node:child_process');
+    try {
+      this.claudeBin = execSync('which claude', { encoding: 'utf-8' }).trim();
+      this.logger.log(`Resolved claude binary: ${this.claudeBin}`);
+    } catch {
+      this.claudeBin = 'claude'; // fallback
+      this.logger.warn('Could not resolve claude path, falling back to "claude"');
+    }
+    return this.claudeBin;
+  }
+
+  /**
    * Stream a prompt to Claude Code headless mode.
    * Returns an Observable that emits parsed NDJSON events in real-time.
    */
@@ -43,6 +62,7 @@ export class ClaudeService {
     options?: { sessionId?: string; allowedTools?: string[]; systemPrompt?: string },
   ): Observable<ClaudeStreamEvent> {
     const subject = new Subject<ClaudeStreamEvent>();
+    const bin = this.resolveClaudeBin();
 
     const args = [
       '-p',
@@ -50,7 +70,6 @@ export class ClaudeService {
       '--output-format',
       'stream-json',
       '--verbose',
-      '--include-partial-messages',
     ];
 
     if (options?.sessionId) {
@@ -65,17 +84,12 @@ export class ClaudeService {
       args.push('--append-system-prompt', options.systemPrompt);
     }
 
-    this.logger.log(`Spawning: claude ${args.join(' ')}`);
+    this.logger.log(`Spawning: ${bin} ${args.map((a) => JSON.stringify(a)).join(' ')}`);
 
-    let child: ChildProcessWithoutNullStreams;
-    try {
-      child = spawn('claude', args, {
-        stdio: ['pipe', 'pipe', 'pipe'],
-      });
-    } catch (err) {
-      subject.error(new Error(`Failed to spawn claude CLI: ${err}`));
-      return subject.asObservable();
-    }
+    const child = spawn(bin, args, {
+      // 'ignore' stdin — claude -p does not need it and a dangling pipe can cause hangs
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
 
     let buffer = '';
 
@@ -98,10 +112,11 @@ export class ClaudeService {
     });
 
     child.stderr.on('data', (chunk: Buffer) => {
-      this.logger.warn(`claude stderr: ${chunk.toString()}`);
+      this.logger.warn(`claude stderr: ${chunk.toString().trim()}`);
     });
 
-    child.on('close', (code) => {
+    child.on('close', (code, signal) => {
+      this.logger.log(`claude process exited (code=${code}, signal=${signal})`);
       // Flush remaining buffer
       if (buffer.trim()) {
         try {
@@ -119,6 +134,7 @@ export class ClaudeService {
     });
 
     child.on('error', (err) => {
+      this.logger.error(`claude spawn error: ${err.message}`);
       subject.error(err);
     });
 
@@ -132,6 +148,7 @@ export class ClaudeService {
     prompt: string,
     options?: { sessionId?: string; allowedTools?: string[]; systemPrompt?: string },
   ): Promise<ClaudeSyncResult> {
+    const bin = this.resolveClaudeBin();
     const args = ['-p', prompt, '--output-format', 'json'];
 
     if (options?.sessionId) {
@@ -146,11 +163,11 @@ export class ClaudeService {
       args.push('--append-system-prompt', options.systemPrompt);
     }
 
-    this.logger.log(`Spawning (sync): claude ${args.join(' ')}`);
+    this.logger.log(`Spawning (sync): ${bin} ${args.map((a) => JSON.stringify(a)).join(' ')}`);
 
     return new Promise((resolve, reject) => {
-      const child = spawn('claude', args, {
-        stdio: ['pipe', 'pipe', 'pipe'],
+      const child = spawn(bin, args, {
+        stdio: ['ignore', 'pipe', 'pipe'],
       });
 
       let stdout = '';
@@ -161,10 +178,13 @@ export class ClaudeService {
       });
 
       child.stderr.on('data', (chunk: Buffer) => {
-        stderr += chunk.toString();
+        const msg = chunk.toString();
+        stderr += msg;
+        this.logger.warn(`claude stderr: ${msg.trim()}`);
       });
 
-      child.on('close', (code) => {
+      child.on('close', (code, signal) => {
+        this.logger.log(`claude (sync) exited (code=${code}, signal=${signal})`);
         if (code !== 0) {
           reject(new Error(`claude exited with code ${code}: ${stderr}`));
           return;
@@ -181,7 +201,10 @@ export class ClaudeService {
         }
       });
 
-      child.on('error', reject);
+      child.on('error', (err) => {
+        this.logger.error(`claude (sync) spawn error: ${err.message}`);
+        reject(err);
+      });
     });
   }
 }
