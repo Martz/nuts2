@@ -77,9 +77,21 @@ export class ClaudeService {
       return subject.asObservable();
     }
 
+    // Close stdin immediately — prompt is passed via -p, not stdin.
+    // Leaving it open can cause the child process to hang waiting for EOF.
+    child.stdin.end();
+
+    this.logger.log(`Child process spawned (PID: ${child.pid ?? 'unknown'})`);
+
     let buffer = '';
+    let chunkCount = 0;
+    let eventCount = 0;
 
     child.stdout.on('data', (chunk: Buffer) => {
+      chunkCount++;
+      this.logger.debug(
+        `stdout chunk #${chunkCount} (${chunk.length} bytes)`,
+      );
       buffer += chunk.toString();
       const lines = buffer.split('\n');
       // Keep the last (possibly incomplete) line in the buffer
@@ -90,6 +102,12 @@ export class ClaudeService {
         if (!trimmed) continue;
         try {
           const parsed: ClaudeStreamEvent = JSON.parse(trimmed);
+          eventCount++;
+          this.logger.log(
+            `Event #${eventCount}: type=${parsed.type}` +
+              (parsed.event?.type ? `, event.type=${parsed.event.type}` : '') +
+              (parsed.result !== undefined ? ', has result' : ''),
+          );
           subject.next(parsed);
         } catch {
           this.logger.warn(`Non-JSON line from claude: ${trimmed}`);
@@ -98,14 +116,22 @@ export class ClaudeService {
     });
 
     child.stderr.on('data', (chunk: Buffer) => {
-      this.logger.warn(`claude stderr: ${chunk.toString()}`);
+      this.logger.warn(`claude stderr: ${chunk.toString().trimEnd()}`);
     });
 
-    child.on('close', (code) => {
+    child.on('close', (code, signal) => {
+      this.logger.log(
+        `Child process exited (code=${code}, signal=${signal}, chunks=${chunkCount}, events=${eventCount})`,
+      );
       // Flush remaining buffer
       if (buffer.trim()) {
         try {
           const parsed: ClaudeStreamEvent = JSON.parse(buffer.trim());
+          eventCount++;
+          this.logger.log(
+            `Event #${eventCount} (flush): type=${parsed.type}` +
+              (parsed.result !== undefined ? ', has result' : ''),
+          );
           subject.next(parsed);
         } catch {
           this.logger.warn(`Non-JSON trailing data: ${buffer.trim()}`);
@@ -119,6 +145,7 @@ export class ClaudeService {
     });
 
     child.on('error', (err) => {
+      this.logger.error(`Child process error: ${err.message}`);
       subject.error(err);
     });
 
@@ -153,18 +180,27 @@ export class ClaudeService {
         stdio: ['pipe', 'pipe', 'pipe'],
       });
 
+      child.stdin.end();
+
+      this.logger.log(`Child process spawned (PID: ${child.pid ?? 'unknown'})`);
+
       let stdout = '';
       let stderr = '';
 
       child.stdout.on('data', (chunk: Buffer) => {
+        this.logger.debug(`stdout chunk (${chunk.length} bytes)`);
         stdout += chunk.toString();
       });
 
       child.stderr.on('data', (chunk: Buffer) => {
+        this.logger.warn(`claude stderr: ${chunk.toString().trimEnd()}`);
         stderr += chunk.toString();
       });
 
-      child.on('close', (code) => {
+      child.on('close', (code, signal) => {
+        this.logger.log(
+          `Child process exited (code=${code}, signal=${signal}, stdout=${stdout.length} bytes)`,
+        );
         if (code !== 0) {
           reject(new Error(`claude exited with code ${code}: ${stderr}`));
           return;
@@ -181,7 +217,10 @@ export class ClaudeService {
         }
       });
 
-      child.on('error', reject);
+      child.on('error', (err) => {
+        this.logger.error(`Child process error: ${err.message}`);
+        reject(err);
+      });
     });
   }
 }

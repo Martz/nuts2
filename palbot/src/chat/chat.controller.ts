@@ -1,5 +1,5 @@
 import { Body, Controller, Post, Sse, Logger } from '@nestjs/common';
-import { Observable, map, filter, catchError, of, concat } from 'rxjs';
+import { Observable, map, filter, catchError, of, concat, tap, finalize } from 'rxjs';
 import { ClaudeService, ClaudeStreamEvent } from '../claude/claude.service.js';
 import { ChatRequestDto } from './dto/chat.dto.js';
 
@@ -33,11 +33,17 @@ export class ChatController {
       systemPrompt: body.systemPrompt,
     });
 
+    let sseEventCount = 0;
+
     const events$ = stream$.pipe(
+      tap((event: ClaudeStreamEvent) =>
+        this.logger.debug(`Raw event from service: type=${event.type}`),
+      ),
       filter((event: ClaudeStreamEvent) => {
         // Pass through text deltas and result messages
         if (event.type === 'stream_event') return true;
         if (event.result !== undefined) return true;
+        this.logger.debug(`Filtered out event: type=${event.type}`);
         return false;
       }),
       map((event: ClaudeStreamEvent): SseMessage => {
@@ -67,6 +73,10 @@ export class ChatController {
           data: JSON.stringify(event.event),
         };
       }),
+      tap((msg: SseMessage) => {
+        sseEventCount++;
+        this.logger.log(`SSE #${sseEventCount}: type=${msg.type}`);
+      }),
       catchError((err: Error) => {
         this.logger.error(`Stream error: ${err.message}`);
         return of<SseMessage>({
@@ -74,6 +84,11 @@ export class ChatController {
           data: JSON.stringify({ error: err.message }),
         });
       }),
+      finalize(() =>
+        this.logger.log(
+          `Stream finished (${sseEventCount} SSE events emitted)`,
+        ),
+      ),
     );
 
     // Append a close signal so the client knows the stream is finished
