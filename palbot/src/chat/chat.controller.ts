@@ -1,6 +1,6 @@
 import { Body, Controller, Post, Sse, Logger } from '@nestjs/common';
-import { Observable, map, filter, catchError, of, concat } from 'rxjs';
-import { ClaudeService, ClaudeStreamEvent } from '../claude/claude.service.js';
+import { Observable, map, catchError, of, concat } from 'rxjs';
+import { ClaudeService, type ClaudeStreamEvent } from '../claude/claude.service.js';
 import { ChatRequestDto } from './dto/chat.dto.js';
 
 interface SseMessage {
@@ -34,38 +34,29 @@ export class ChatController {
     });
 
     const events$ = stream$.pipe(
-      filter((event: ClaudeStreamEvent) => {
-        // Pass through text deltas and result messages
-        if (event.type === 'stream_event') return true;
-        if (event.result !== undefined) return true;
-        return false;
-      }),
       map((event: ClaudeStreamEvent): SseMessage => {
-        // Final result message
-        if (event.result !== undefined) {
-          return {
-            type: 'done',
-            data: JSON.stringify({
-              result: event.result,
-              sessionId: event.session_id,
-            }),
-          };
-        }
+        switch (event.type) {
+          case 'result':
+            return {
+              type: 'done',
+              data: JSON.stringify({
+                result: event.result,
+                sessionId: event.sessionId,
+              }),
+            };
 
-        // Text delta — the actual streaming tokens
-        const delta = event.event?.delta;
-        if (delta?.type === 'text_delta' && delta.text) {
-          return {
-            type: 'text',
-            data: delta.text,
-          };
-        }
+          case 'assistant_text':
+            return {
+              type: 'text',
+              data: event.text ?? '',
+            };
 
-        // Other stream events (tool_use, content_block_start, etc.)
-        return {
-          type: 'event',
-          data: JSON.stringify(event.event),
-        };
+          case 'message':
+            return {
+              type: 'event',
+              data: JSON.stringify(event.raw),
+            };
+        }
       }),
       catchError((err: Error) => {
         this.logger.error(`Stream error: ${err.message}`);
