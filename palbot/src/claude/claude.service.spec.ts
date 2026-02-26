@@ -61,8 +61,9 @@ function makeAssistantWithToolUse() {
   };
 }
 
-// Helper: create an async generator from an array of messages.
-async function* asyncGen<T>(items: T[]): AsyncGenerator<T, void> {
+// Helper: create a generator from an array of messages.
+// A sync generator works fine with `for await` in the service under test.
+function* asyncGen<T>(items: T[]): Generator<T, void> {
   for (const item of items) {
     yield item;
   }
@@ -145,7 +146,9 @@ describe('ClaudeService', () => {
         ]),
       );
 
-      const events = await firstValueFrom(service.stream('run tool').pipe(toArray()));
+      const events = await firstValueFrom(
+        service.stream('run tool').pipe(toArray()),
+      );
 
       expect(events).toHaveLength(2);
       expect(events[0]).toMatchObject({ type: 'message' });

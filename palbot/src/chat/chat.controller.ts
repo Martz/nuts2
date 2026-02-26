@@ -1,6 +1,9 @@
 import { Body, Controller, Post, Sse, Logger } from '@nestjs/common';
 import { Observable, map, catchError, of, concat } from 'rxjs';
-import { ClaudeService, type ClaudeStreamEvent } from '../claude/claude.service.js';
+import {
+  ClaudeService,
+  type ClaudeStreamEvent,
+} from '../claude/claude.service.js';
 import { ChatRequestDto } from './dto/chat.dto.js';
 
 interface SseMessage {

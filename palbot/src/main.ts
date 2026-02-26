@@ -16,4 +16,4 @@ async function bootstrap() {
   logger.log(`  POST /chat        — sync response`);
   logger.log(`  POST /chat/stream  — SSE streaming response`);
 }
-bootstrap();
+void bootstrap();
