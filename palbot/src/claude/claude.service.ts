@@ -1,6 +1,10 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Observable, Subject } from 'rxjs';
-import { query, type Options, type SDKMessage, type SDKResultError } from '@anthropic-ai/claude-agent-sdk';
+import {
+  query,
+  type Options,
+  type SDKMessage,
+} from '@anthropic-ai/claude-agent-sdk';
 
 /**
  * Re-export SDK message type so consumers can reference it if needed.
@@ -46,7 +50,10 @@ export class ClaudeService {
    * Uses includePartialMessages so stream_event deltas arrive in real-time.
    * The final assembled `assistant` message is suppressed to avoid duplicate text.
    */
-  stream(prompt: string, options?: ClaudeQueryOptions): Observable<ClaudeStreamEvent> {
+  stream(
+    prompt: string,
+    options?: ClaudeQueryOptions,
+  ): Observable<ClaudeStreamEvent> {
     const subject = new Subject<ClaudeStreamEvent>();
 
     // includePartialMessages only makes sense for streaming — kept here, not in buildSdkOptions.
@@ -58,7 +65,7 @@ export class ClaudeService {
     this.logger.log(`SDK query (stream): "${prompt.slice(0, 80)}..."`);
 
     // Run the async generator in the background and feed the RxJS Subject.
-    (async () => {
+    void (async () => {
       try {
         const conversation = query({ prompt, options: sdkOptions });
 
@@ -82,7 +89,10 @@ export class ClaudeService {
   /**
    * Send a prompt and wait for the complete response.
    */
-  async ask(prompt: string, options?: ClaudeQueryOptions): Promise<ClaudeSyncResult> {
+  async ask(
+    prompt: string,
+    options?: ClaudeQueryOptions,
+  ): Promise<ClaudeSyncResult> {
     const sdkOptions: Options = this.buildSdkOptions(options);
     // No includePartialMessages for sync calls — we only need the final result.
 
@@ -100,8 +110,10 @@ export class ClaudeService {
         if (message.subtype === 'success') {
           resultText = message.result;
         } else {
-          const errorMessage = (message as SDKResultError).errors.join('; ');
-          throw new Error(`Claude query failed (${message.subtype}): ${errorMessage}`);
+          const errorMessage = message.errors.join('; ');
+          throw new Error(
+            `Claude query failed (${message.subtype}): ${errorMessage}`,
+          );
         }
       }
     }
@@ -162,7 +174,10 @@ export class ClaudeService {
     switch (message.type) {
       case 'stream_event': {
         // Partial streaming delta — extract text_delta content blocks.
-        const event = message.event;
+        const event = message.event as
+          | Record<string, unknown>
+          | null
+          | undefined;
         if (
           event &&
           'type' in event &&
@@ -182,7 +197,9 @@ export class ClaudeService {
         // Text content is already streamed token-by-token above, so skip it here
         // to avoid sending the full response again as a single chunk.
         // Only surface non-text blocks (tool_use, thinking, etc.) that don't appear in deltas.
-        const content = message.message.content as Array<{ type: string }>;
+        const { content } = message.message as {
+          content: Array<{ type: string }>;
+        };
         const hasNonTextBlocks = content.some((block) => block.type !== 'text');
         if (hasNonTextBlocks) {
           return { type: 'message', raw: message };
