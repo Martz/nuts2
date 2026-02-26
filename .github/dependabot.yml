@@ -1,0 +1,16 @@
+version: 2
+
+updates:
+  - package-ecosystem: npm
+    directory: /palbot
+    schedule:
+      interval: weekly
+    # Set to 0 to disable automatic PRs while keeping config in place.
+    # Increase this when ready to enable dependency updates.
+    open-pull-requests-limit: 0
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0

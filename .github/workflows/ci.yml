@@ -7,6 +7,27 @@ on:
     branches: [main]
 
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: palbot
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: palbot/package-lock.json
+
+      - run: npm ci
+      - name: Lint
+        run: npx eslint "{src,apps,libs,test}/**/*.ts"
+      - name: Format check
+        run: npx prettier --check "src/**/*.ts" "test/**/*.ts"
+
   test:
     runs-on: ubuntu-latest
     defaults:
@@ -24,4 +45,9 @@ jobs:
 
       - run: npm ci
       - run: npm run build
-      - run: npm test
+      - name: Unit tests with coverage
+        run: npm run test:cov
+      - name: E2E tests
+        run: npm run test:e2e
+      - name: Audit dependencies
+        run: npm audit --audit-level=high
